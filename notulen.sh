@@ -10,12 +10,14 @@ FP16="False"
 DEVICE="auto"
 BASE_OUTDIR="./notulen"
 KEEP_TEMP="no"
+TRANSCRIBE_ONLY="no"
 
 usage() {
   cat <<'EOF'
 Usage:
   ./notulen.sh [options] "<nama_rapat>" <audio_file>
   ./notulen.sh "<nama_rapat>" MakeNotulen
+  ./notulen.sh "<nama_rapat_final>" MakeNotulenFromParts <run_date> <part_prefix>
 
 Options:
   -m, --model        Whisper model (default: medium)
@@ -24,6 +26,7 @@ Options:
   -f, --fp16         Use fp16 (True/False) (default: False)
   -b, --base-outdir  Base output dir (default: ./notulen)
   -k, --keep-temp    Keep preprocessed wav (default: no)
+  -t, --transcribe-only  Stop after transcribe (skip NOTULENSI + RTL)
   -h, --help         Help
 
 Env:
@@ -35,7 +38,9 @@ Examples:
   ./notulen.sh -m small -d cpu "Rapat Koordinasi Carik" rapat.wav
   ./notulen.sh -m medium -d cuda -f True "Rapat Koordinasi Carik" rapat.wav
   ./notulen.sh -m medium -d auto -f True "Rapat Koordinasi Carik" rapat.wav
+  ./notulen.sh -m small -d cpu -t "Rapat Koordinasi Carik" rapat.wav
   ./notulen.sh "Rapat Koordinasi Carik" MakeNotulen
+  ./notulen.sh "Rapat Koordinasi DTSEN" MakeNotulenFromParts 2026-02-13 2026-02-10
   OPENAI_API_KEY=xxx ./notulen.sh "FGD DTSEN" rekaman.mp3
 EOF
 }
@@ -59,6 +64,7 @@ while [[ $# -gt 0 ]]; do
     -f|--fp16) FP16="$2"; shift 2;;
     -b|--base-outdir) BASE_OUTDIR="$2"; shift 2;;
     -k|--keep-temp) KEEP_TEMP="yes"; shift 1;;
+    -t|--transcribe-only) TRANSCRIBE_ONLY="yes"; shift 1;;
     -h|--help) usage; exit 0;;
     -*) echo "Unknown option: $1"; usage; exit 1;;
     *) ARGS+=("$1"); shift;;
@@ -74,30 +80,43 @@ fi
 MEETING_NAME="${ARGS[0]}"
 INPUT_ARG="${ARGS[1]}"
 MAKE_NOTULEN_ONLY="no"
+MAKE_NOTULEN_FROM_PARTS="no"
+PARTS_DATE=""
+PARTS_PREFIX=""
 
 if [[ "$INPUT_ARG" == "MakeNotulen" ]]; then
   MAKE_NOTULEN_ONLY="yes"
+elif [[ "$INPUT_ARG" == "MakeNotulenFromParts" ]]; then
+  MAKE_NOTULEN_FROM_PARTS="yes"
+  if [[ ${#ARGS[@]} -lt 4 ]]; then
+    echo "Error: mode MakeNotulenFromParts butuh <run_date> dan <part_prefix>."
+    usage
+    exit 1
+  fi
+  PARTS_DATE="${ARGS[2]}"
+  PARTS_PREFIX="${ARGS[3]}"
 else
   AUDIO_FILE="$INPUT_ARG"
 fi
 
-if [[ "$MAKE_NOTULEN_ONLY" != "yes" ]]; then
+if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; then
   if [[ ! -f "$AUDIO_FILE" ]]; then
     echo "Error: file audio tidak ditemukan: $AUDIO_FILE"
     exit 1
   fi
 fi
 
-command -v ffmpeg >/dev/null 2>&1 || { echo "Error: ffmpeg belum terpasang."; exit 1; }
-
-# Whisper command: prefer whisper; fallback to pipx run
 WHISPER_CMD="whisper"
-if ! command -v whisper >/dev/null 2>&1; then
-  if command -v pipx >/dev/null 2>&1; then
-    WHISPER_CMD="pipx run openai-whisper"
-  else
-    echo "Error: 'whisper' tidak ditemukan dan pipx tidak ada."
-    exit 1
+if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; then
+  command -v ffmpeg >/dev/null 2>&1 || { echo "Error: ffmpeg belum terpasang."; exit 1; }
+  # Whisper command: prefer whisper; fallback to pipx run
+  if ! command -v whisper >/dev/null 2>&1; then
+    if command -v pipx >/dev/null 2>&1; then
+      WHISPER_CMD="pipx run openai-whisper"
+    else
+      echo "Error: 'whisper' tidak ditemukan dan pipx tidak ada."
+      exit 1
+    fi
   fi
 fi
 
@@ -114,20 +133,26 @@ if [[ "$MAKE_NOTULEN_ONLY" == "yes" ]]; then
     echo "Error: folder notulen untuk rapat ini tidak ditemukan."
     exit 1
   fi
+elif [[ "$MAKE_NOTULEN_FROM_PARTS" == "yes" ]]; then
+  TODAY="$PARTS_DATE"
+  OUTDIR="${BASE_OUTDIR}/${PARTS_DATE}/${MEETING_SLUG}"
+  mkdir -p "$OUTDIR"
 else
   OUTDIR="${BASE_OUTDIR}/${TODAY}/${MEETING_SLUG}"
   mkdir -p "$OUTDIR"
 fi
 
-if [[ "$MAKE_NOTULEN_ONLY" != "yes" ]]; then
+if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; then
   # Copy original audio for traceability
   cp -f "$AUDIO_FILE" "$OUTDIR/"
 fi
 
-if [[ "$MAKE_NOTULEN_ONLY" != "yes" ]]; then
+if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; then
   BASENAME="$(basename "$AUDIO_FILE")"
   STEM="${BASENAME%.*}"
   PRE_WAV="${OUTDIR}/${STEM}__preproc.wav"
+elif [[ "$MAKE_NOTULEN_FROM_PARTS" == "yes" ]]; then
+  STEM="combined"
 else
   # best effort: infer STEM from existing progress files
   STEM="$(ls -1 "${OUTDIR}"/*__whisper.progress.txt 2>/dev/null | head -n 1 | xargs -r basename | sed -E 's/__whisper\.progress\.txt$//' )"
@@ -137,12 +162,16 @@ echo "========================================"
 echo "Tanggal     : $TODAY"
 echo "Rapat       : $MEETING_NAME"
 echo "Output dir  : $OUTDIR"
-if [[ "$MAKE_NOTULEN_ONLY" != "yes" ]]; then
+if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; then
   echo "Audio       : $AUDIO_FILE"
+elif [[ "$MAKE_NOTULEN_FROM_PARTS" == "yes" ]]; then
+  echo "Audio       : (skip, merge parts ${PARTS_PREFIX}_part_*.flac dari ${PARTS_DATE})"
 else
   echo "Audio       : (skip, MakeNotulen)"
 fi
-if [[ "$DEVICE" == "auto" ]]; then
+if [[ "$MAKE_NOTULEN_ONLY" == "yes" || "$MAKE_NOTULEN_FROM_PARTS" == "yes" ]]; then
+  echo "Model       : (skip transcribe)"
+elif [[ "$DEVICE" == "auto" ]]; then
   echo "Model       : $MODEL | Lang: $LANGUAGE | device: auto (try cuda->cpu) | fp16: $FP16"
 else
   echo "Model       : $MODEL | Lang: $LANGUAGE | device: $DEVICE | fp16: $FP16"
@@ -152,7 +181,7 @@ echo "========================================"
 # =========================
 # 1) Preprocess audio
 # =========================
-if [[ "$MAKE_NOTULEN_ONLY" != "yes" ]]; then
+if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; then
   echo "[1/3] Preprocess audio (mono 16kHz + dynaudnorm)..."
   ffmpeg -y -hide_banner -loglevel error \
     -i "$AUDIO_FILE" \
@@ -164,7 +193,7 @@ fi
 # =========================
 # 2) Whisper transcribe
 # =========================
-if [[ "$MAKE_NOTULEN_ONLY" != "yes" ]]; then
+if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; then
   echo "[2/3] Transcribe with Whisper..."
 fi
 
@@ -219,7 +248,7 @@ run_whisper() {
   fi
 }
 
-if [[ "$MAKE_NOTULEN_ONLY" != "yes" ]]; then
+if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; then
   RESUME_TS="$(get_resume_ts || true)"
   RESUME_MODE="no"
   PREV_TXT=""
@@ -268,15 +297,51 @@ if [[ "$MAKE_NOTULEN_ONLY" != "yes" ]]; then
   fi
 fi
 
-TXT_OUT="${OUTDIR}/${STEM}__preproc.txt"
-if [[ ! -f "$TXT_OUT" ]]; then
-  # beberapa build whisper menamai output sama dengan input tanpa suffix; cari txt terbaru
-  TXT_OUT="$(ls -t "$OUTDIR"/*.txt 2>/dev/null | head -n 1 || true)"
+if [[ "$MAKE_NOTULEN_FROM_PARTS" == "yes" ]]; then
+  echo "[1/1] Merge transkrip part sebelum MakeNotulen..."
+  WHISPER_PROGRESS="${OUTDIR}/combined__whisper.progress.txt"
+  : > "$WHISPER_PROGRESS"
+  shopt -s nullglob
+  part_dirs=("${BASE_OUTDIR}/${PARTS_DATE}/transkrip_${PARTS_PREFIX}_part_"*)
+  shopt -u nullglob
+  merged_count=0
+  for part_dir in "${part_dirs[@]}"; do
+    [[ -d "$part_dir" ]] || continue
+    part_name="$(basename "$part_dir")"
+    part_stem="${part_name#transkrip_}"
+    preferred_txt="${part_dir}/${part_stem}__preproc.txt"
+    if [[ -f "$preferred_txt" ]]; then
+      src_txt="$preferred_txt"
+    else
+      src_txt="$(find "$part_dir" -maxdepth 1 -type f -name "*.txt" ! -name "*__whisper.progress.txt" | sort | head -n 1 || true)"
+    fi
+    if [[ -z "${src_txt:-}" || ! -f "$src_txt" ]]; then
+      echo "Skip: txt part belum ada -> $part_dir"
+      continue
+    fi
+    {
+      echo "===== ${part_stem} ====="
+      cat "$src_txt"
+      echo
+    } >> "$WHISPER_PROGRESS"
+    merged_count=$((merged_count + 1))
+  done
+  if [[ "$merged_count" -eq 0 ]]; then
+    echo "Error: tidak ada transkrip part yang bisa digabung."
+    exit 1
+  fi
+  TXT_OUT="$WHISPER_PROGRESS"
+else
+  TXT_OUT="${OUTDIR}/${STEM}__preproc.txt"
+  if [[ ! -f "$TXT_OUT" ]]; then
+    # beberapa build whisper menamai output sama dengan input tanpa suffix; cari txt terbaru
+    TXT_OUT="$(ls -t "$OUTDIR"/*.txt 2>/dev/null | head -n 1 || true)"
+  fi
 fi
 
 # If resume created a new txt, merge with previous txt for continuity
 MERGED_TXT=""
-if [[ "$MAKE_NOTULEN_ONLY" != "yes" ]]; then
+if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; then
   if [[ -n "${PREV_TXT:-}" && -f "$PREV_TXT" && -n "${TXT_OUT:-}" && -f "$TXT_OUT" && "$PREV_TXT" != "$TXT_OUT" ]]; then
     MERGED_TXT="${OUTDIR}/${STEM}__merged.txt"
     cat "$PREV_TXT" "$TXT_OUT" > "$MERGED_TXT"
@@ -295,21 +360,23 @@ if [[ -z "${TXT_OUT:-}" || ! -f "$TXT_OUT" ]]; then
 fi
 
 # remove temp wav if not kept
-if [[ "$MAKE_NOTULEN_ONLY" != "yes" ]]; then
+if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; then
   if [[ "$KEEP_TEMP" != "yes" ]]; then
     rm -f "$PRE_WAV"
   fi
 fi
 
 # =========================
-# 3) Generate notulensi
+# 3) Generate notulensi (optional)
 # =========================
-echo "[3/3] Generate NOTULENSI (AI if OPENAI_API_KEY set, else template)..."
-
 NOTULEN_MD="${OUTDIR}/NOTULENSI.md"
 RTL_CSV="${OUTDIR}/RTL.csv"
 
-if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+if [[ "$TRANSCRIBE_ONLY" != "yes" ]]; then
+  echo "[3/3] Generate NOTULENSI (AI if OPENAI_API_KEY set, else template)..."
+fi
+
+if [[ "$TRANSCRIBE_ONLY" != "yes" && -n "${OPENAI_API_KEY:-}" ]]; then
   # Create a tiny venv (local) to avoid PEP668 issues
   VENV_DIR="${OUTDIR}/.venv_notulen"
   if [[ ! -d "$VENV_DIR" ]]; then
@@ -417,7 +484,7 @@ print("OK:", out_md, out_csv)
 PY
 
   deactivate
-else
+elif [[ "$TRANSCRIBE_ONLY" != "yes" ]]; then
   # Offline template
   cat > "$NOTULEN_MD" <<EOF
 # NOTULENSI RAPAT: ${MEETING_NAME}
@@ -452,6 +519,9 @@ echo "========================================"
 echo "SELESAI ✅"
 echo "Folder: $OUTDIR"
 echo "- Transkrip: $TXT_OUT"
-echo "- Notulensi: $NOTULEN_MD"
-echo "- RTL CSV  : $RTL_CSV"
+echo "- Progress : $WHISPER_PROGRESS"
+if [[ "$TRANSCRIBE_ONLY" != "yes" ]]; then
+  echo "- Notulensi: $NOTULEN_MD"
+  echo "- RTL CSV  : $RTL_CSV"
+fi
 echo "========================================"

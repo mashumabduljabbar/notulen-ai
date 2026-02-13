@@ -93,7 +93,13 @@ Format perintah:
 ./notulen.sh "NAMA RAPAT" file_audio
 ```
 
-### Contoh (standar instansi):
+### Mode transkrip saja (disarankan untuk file part)
+Gunakan `-t` agar hanya transkripsi (skip `NOTULENSI.md` + `RTL.csv`):
+```bash
+./notulen.sh -m small -d cpu -t "Transkrip 2026-02-10 part 000" 2026-02-10_part_000.flac
+```
+
+### Contoh standar (transkrip + notulen template/AI):
 ```bash
 ./notulen.sh "Rapat Koordinasi Kader Dasawisma" rapat.wav
 ```
@@ -103,24 +109,43 @@ Format perintah:
 OPENAI_API_KEY=sk-xxxxx OPENAI_MODEL=gpt-5-mini ./notulen.sh "FGD Tata Kelola DTSEN" rekaman_fgd.mp3
 ```
 
+### Buat notulen ulang dari folder rapat terbaru (tanpa transkrip ulang):
+```bash
+./notulen.sh "Nama Rapat" MakeNotulen
+```
+
+### Gabung hasil transkrip part lalu buat notulen AI:
+```bash
+./notulen.sh "Nama Rapat Final" MakeNotulenFromParts 2026-02-13 2026-02-10
+```
+Keterangan:
+- `2026-02-13` = tanggal folder output transkrip part di `notulen/`
+- `2026-02-10` = prefix part (`2026-02-10_part_000.flac`, dst)
+
 ---
 
 ## 4. Struktur Output Otomatis
 
-Setiap eksekusi akan membuat folder:
+Setiap eksekusi membuat folder:
 
 ```
 notulen/
 └── YYYY-MM-DD/
     └── nama_rapat/
-        ├── rekaman_asli.wav
-        ├── transkrip.txt
-        ├── transkrip.srt
-        ├── NOTULENSI.md
-        └── RTL.csv
+        ├── rekaman_asli.ext                 # jika mode audio biasa (bukan MakeNotulen)
+        ├── *_whisper.progress.txt           # progress realtime
+        ├── *.txt / *.srt / *.vtt / *.tsv    # output whisper
+        ├── whisper.log
+        ├── NOTULENSI.md                     # jika tidak pakai -t
+        └── RTL.csv                          # jika tidak pakai -t
 ```
 
-### File Utama:
+Pada mode `MakeNotulenFromParts`, folder rapat final akan berisi:
+- `combined__whisper.progress.txt` (gabungan transkrip part)
+- `NOTULENSI.md`
+- `RTL.csv`
+
+### File utama:
 - **NOTULENSI.md** → siap disalin ke Word / Nota Dinas
 - **RTL.csv** → siap dipantau di Excel
 
@@ -322,7 +347,7 @@ Catatan:
 
 ---
 
-## 7.4 Resume Otomatis & MakeNotulen
+## 7.4 Resume Otomatis & Mode MakeNotulen
 
 ### Resume otomatis (lanjut dari menit terakhir)
 Jika proses transcribe terhenti, script akan:
@@ -338,6 +363,17 @@ Jika transkrip sudah ada, kamu bisa membuat notulen ulang dengan:
 ./notulen.sh "Nama Rapat" MakeNotulen
 ```
 Script akan mencari folder rapat yang **terbaru** dan membaca `__whisper.progress.txt` sebagai sumber.
+
+### Gabung hasil transkrip part lalu buat notulen
+Jika kamu transkrip per part (satu-satu), jalankan:
+```bash
+./notulen.sh "Nama Rapat Final" MakeNotulenFromParts 2026-02-13 2026-02-10
+```
+Script akan:
+- mencari folder part dengan pola `notulen/2026-02-13/transkrip_2026-02-10_part_*`
+- menggabungkan transkrip `.txt` yang tersedia
+- menyimpan gabungan ke `combined__whisper.progress.txt`
+- membuat `NOTULENSI.md` + `RTL.csv` dari gabungan tersebut
 
 ---
 
