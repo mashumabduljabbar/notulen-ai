@@ -83,6 +83,7 @@ MAKE_NOTULEN_ONLY="no"
 MAKE_NOTULEN_FROM_PARTS="no"
 PARTS_DATE=""
 PARTS_PREFIX=""
+PARTS_PREFIX_SLUG=""
 
 if [[ "$INPUT_ARG" == "MakeNotulen" ]]; then
   MAKE_NOTULEN_ONLY="yes"
@@ -95,6 +96,7 @@ elif [[ "$INPUT_ARG" == "MakeNotulenFromParts" ]]; then
   fi
   PARTS_DATE="${ARGS[2]}"
   PARTS_PREFIX="${ARGS[3]}"
+  PARTS_PREFIX_SLUG="$(slugify "$PARTS_PREFIX")"
 else
   AUDIO_FILE="$INPUT_ARG"
 fi
@@ -166,6 +168,9 @@ if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; t
   echo "Audio       : $AUDIO_FILE"
 elif [[ "$MAKE_NOTULEN_FROM_PARTS" == "yes" ]]; then
   echo "Audio       : (skip, merge parts ${PARTS_PREFIX}_part_*.flac dari ${PARTS_DATE})"
+  if [[ "$PARTS_PREFIX_SLUG" != "$PARTS_PREFIX" ]]; then
+    echo "Prefix part : raw='${PARTS_PREFIX}' -> slug='${PARTS_PREFIX_SLUG}'"
+  fi
 else
   echo "Audio       : (skip, MakeNotulen)"
 fi
@@ -302,10 +307,20 @@ if [[ "$MAKE_NOTULEN_FROM_PARTS" == "yes" ]]; then
   WHISPER_PROGRESS="${OUTDIR}/combined__whisper.progress.txt"
   : > "$WHISPER_PROGRESS"
   shopt -s nullglob
-  part_dirs=("${BASE_OUTDIR}/${PARTS_DATE}/transkrip_${PARTS_PREFIX}_part_"*)
+  part_dirs=(
+    "${BASE_OUTDIR}/${PARTS_DATE}/transkrip_${PARTS_PREFIX}_part_"*
+    "${BASE_OUTDIR}/${PARTS_DATE}/transkrip_${PARTS_PREFIX_SLUG}_part_"*
+  )
   shopt -u nullglob
-  merged_count=0
+  declare -A seen_part_dirs=()
+  uniq_part_dirs=()
   for part_dir in "${part_dirs[@]}"; do
+    [[ -n "${seen_part_dirs["$part_dir"]+x}" ]] && continue
+    seen_part_dirs["$part_dir"]=1
+    uniq_part_dirs+=("$part_dir")
+  done
+  merged_count=0
+  for part_dir in "${uniq_part_dirs[@]}"; do
     [[ -d "$part_dir" ]] || continue
     part_name="$(basename "$part_dir")"
     part_stem="${part_name#transkrip_}"
@@ -366,6 +381,36 @@ if [[ "$MAKE_NOTULEN_ONLY" != "yes" && "$MAKE_NOTULEN_FROM_PARTS" != "yes" ]]; t
   fi
 fi
 
+write_template_notulen() {
+  cat > "$NOTULEN_MD" <<EOF
+# NOTULENSI RAPAT: ${MEETING_NAME}
+
+- Tanggal: ${TODAY}
+- Waktu: Tidak disebutkan di rekaman
+- Peserta: Tidak disebutkan lengkap
+- Lokasi/Media: (Zoom/Offline) TBD
+
+## Ringkasan Pembahasan
+- (Isi ringkasan dari transkrip: ${TXT_OUT})
+
+## Keputusan
+- TBD
+
+## Isu/Risiko yang Muncul
+- TBD
+
+## RTL
+| No | Tindak Lanjut | PIC | Due Date | Keterangan |
+|---:|---|---|---|---|
+| 1 | TBD | TBD | TBD | TBD |
+EOF
+
+  cat > "$RTL_CSV" <<EOF
+No,Tindak Lanjut,PIC,Due Date,Keterangan
+1,TBD,TBD,TBD,TBD
+EOF
+}
+
 # =========================
 # 3) Generate notulensi (optional)
 # =========================
@@ -389,15 +434,15 @@ if [[ "$TRANSCRIBE_ONLY" != "yes" && -n "${OPENAI_API_KEY:-}" ]]; then
 
   OPENAI_MODEL="${OPENAI_MODEL:-gpt-5-mini}"
 
-  python3 - <<PY
-import os, csv, textwrap
+  if ! MEETING_NAME="$MEETING_NAME" TXT_OUT="$TXT_OUT" NOTULEN_MD="$NOTULEN_MD" RTL_CSV="$RTL_CSV" OPENAI_MODEL="$OPENAI_MODEL" python3 - <<'PY'
+import os, csv
 from openai import OpenAI
 
-meeting = os.environ.get("MEETING_NAME", "$MEETING_NAME")
-txt_path = "$TXT_OUT"
-out_md = "$NOTULEN_MD"
-out_csv = "$RTL_CSV"
-model = os.environ.get("OPENAI_MODEL", "$OPENAI_MODEL")
+meeting = os.environ["MEETING_NAME"]
+txt_path = os.environ["TXT_OUT"]
+out_md = os.environ["NOTULEN_MD"]
+out_csv = os.environ["RTL_CSV"]
+model = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
 
 with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
     transcript = f.read()
@@ -482,37 +527,15 @@ else:
 
 print("OK:", out_md, out_csv)
 PY
+  then
+    echo "Peringatan: OpenAI gagal (mis. quota habis/API error). Pakai template offline."
+    write_template_notulen
+  fi
 
   deactivate
 elif [[ "$TRANSCRIBE_ONLY" != "yes" ]]; then
   # Offline template
-  cat > "$NOTULEN_MD" <<EOF
-# NOTULENSI RAPAT: ${MEETING_NAME}
-
-- Tanggal: ${TODAY}
-- Waktu: Tidak disebutkan di rekaman
-- Peserta: Tidak disebutkan lengkap
-- Lokasi/Media: (Zoom/Offline) TBD
-
-## Ringkasan Pembahasan
-- (Isi ringkasan dari transkrip: ${TXT_OUT})
-
-## Keputusan
-- TBD
-
-## Isu/Risiko yang Muncul
-- TBD
-
-## RTL
-| No | Tindak Lanjut | PIC | Due Date | Keterangan |
-|---:|---|---|---|---|
-| 1 | TBD | TBD | TBD | TBD |
-EOF
-
-  cat > "$RTL_CSV" <<EOF
-No,Tindak Lanjut,PIC,Due Date,Keterangan
-1,TBD,TBD,TBD,TBD
-EOF
+  write_template_notulen
 fi
 
 echo "========================================"

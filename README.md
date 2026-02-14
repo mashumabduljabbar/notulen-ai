@@ -121,6 +121,7 @@ OPENAI_API_KEY=sk-xxxxx OPENAI_MODEL=gpt-5-mini ./notulen.sh "FGD Tata Kelola DT
 Keterangan:
 - `2026-02-13` = tanggal folder output transkrip part di `notulen/`
 - `2026-02-10` = prefix part (`2026-02-10_part_000.flac`, dst)
+- `part_prefix` akan dicoba dalam bentuk raw dan slug (contoh: `"2026-02-13 DILAN"` juga cocok ke folder `transkrip_2026-02-13_dilan_part_*`)
 
 ---
 
@@ -370,7 +371,7 @@ Jika kamu transkrip per part (satu-satu), jalankan:
 ./notulen.sh "Nama Rapat Final" MakeNotulenFromParts 2026-02-13 2026-02-10
 ```
 Script akan:
-- mencari folder part dengan pola `notulen/2026-02-13/transkrip_2026-02-10_part_*`
+- mencari folder part dengan pola `notulen/2026-02-13/transkrip_2026-02-10_part_*` (raw + slug)
 - menggabungkan transkrip `.txt` yang tersedia
 - menyimpan gabungan ke `combined__whisper.progress.txt`
 - membuat `NOTULENSI.md` + `RTL.csv` dari gabungan tersebut
